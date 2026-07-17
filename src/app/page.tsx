@@ -20,7 +20,7 @@ export default function Dashboard() {
   const [files, setFiles] = useState<FileRecord[]>([]);
   const [isDragging, setIsDragging] = useState(false);
   const [uploading, setUploading] = useState<{ name: string; progress: number; speedStr?: string; etaStr?: string } | null>(null);
-  const [user, setUser] = useState<{ name: string; email: string } | null>(null);
+  const [user, setUser] = useState<{ name: string; email: string; role: string } | null>(null);
   
   const fileInputRef = useRef<HTMLInputElement>(null);
   const router = useRouter();
@@ -65,6 +65,24 @@ export default function Dashboard() {
     localStorage.removeItem('token');
     localStorage.removeItem('user');
     router.push('/login');
+  };
+
+  const deleteFile = async (fileId: string, fileName: string) => {
+    if (!tokenRef.current) return;
+    if (!window.confirm(`Delete "${fileName}"? This cannot be undone.`)) return;
+    try {
+      const res = await fetch(`${API_URL}/${fileId}`, {
+        method: 'DELETE',
+        headers: { 'Authorization': `Bearer ${tokenRef.current}` }
+      });
+      if (res.ok) {
+        fetchFiles();
+      } else {
+        alert('Failed to delete file.');
+      }
+    } catch (err) {
+      alert('Network error while deleting.');
+    }
   };
 
   const formatBytes = (bytes: string | number) => {
@@ -175,6 +193,9 @@ export default function Dashboard() {
         
         <div style={{ display: 'flex', alignItems: 'center', gap: '1.5rem' }}>
           <span style={{ color: 'var(--text-secondary)' }}>Welcome, <strong style={{ color: 'white' }}>{user.name}</strong></span>
+          {user.role === 'ADMIN' && (
+            <a href="/admin" style={{ padding: '0.5rem 1rem', backgroundColor: 'rgba(139, 92, 246, 0.15)', color: '#a78bfa', border: '1px solid rgba(139, 92, 246, 0.3)', borderRadius: '8px', cursor: 'pointer', fontWeight: 500, textDecoration: 'none', fontSize: '0.9rem' }}>Admin Panel</a>
+          )}
           <button 
             onClick={handleLogout}
             style={{
@@ -259,11 +280,20 @@ export default function Dashboard() {
                     <span>{new Date(file.createdAt).toLocaleDateString()}</span>
                   </div>
                 </div>
-                {file.status === 'READY' && (
-                  <a href={`${API_URL}/download/${file.id}?token=${tokenRef.current}`} className={styles.downloadBtn} download>
-                    Download
-                  </a>
-                )}
+                <div style={{ display: 'flex', gap: '0.5rem', marginTop: '0.5rem' }}>
+                  {file.status === 'READY' && (
+                    <a href={`${API_URL}/download/${file.id}?token=${tokenRef.current}`} className={styles.downloadBtn} download>
+                      Download
+                    </a>
+                  )}
+                  <button
+                    onClick={() => deleteFile(file.id, file.originalName)}
+                    title="Delete file"
+                    style={{ padding: '0.4rem 0.75rem', backgroundColor: 'rgba(255,50,50,0.1)', color: '#ff8a8a', border: '1px solid rgba(255,50,50,0.25)', borderRadius: '6px', cursor: 'pointer', fontSize: '0.8rem', fontWeight: 500 }}
+                  >
+                    🗑 Delete
+                  </button>
+                </div>
               </div>
             ))}
             
