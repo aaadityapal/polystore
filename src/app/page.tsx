@@ -4,8 +4,9 @@ import { useState, useEffect, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import styles from './page.module.css';
 
-// Using environment variable for API URL (defaults to localhost for development)
-const API_URL = process.env.NEXT_PUBLIC_API_URL ? `${process.env.NEXT_PUBLIC_API_URL}/files` : 'http://127.0.0.1:8000/api/files';
+const API_URL = process.env.NEXT_PUBLIC_API_URL
+  ? `${process.env.NEXT_PUBLIC_API_URL}/files`
+  : 'http://127.0.0.1:8000/api/files';
 
 type FileRecord = {
   id: string;
@@ -16,32 +17,32 @@ type FileRecord = {
   createdAt: string;
 };
 
+type UploadState = {
+  name: string;
+  progress: number;
+  speedStr?: string;
+  etaStr?: string;
+};
+
 export default function Dashboard() {
-  const [files, setFiles] = useState<FileRecord[]>([]);
+  const [files, setFiles]           = useState<FileRecord[]>([]);
   const [isDragging, setIsDragging] = useState(false);
-  const [uploading, setUploading] = useState<{ name: string; progress: number; speedStr?: string; etaStr?: string } | null>(null);
+  const [uploading, setUploading]   = useState<UploadState | null>(null);
   const [uploadQueue, setUploadQueue] = useState<File[]>([]);
-  const [user, setUser] = useState<{ name: string; email: string; role: string } | null>(null);
-  
-  const fileInputRef = useRef<HTMLInputElement>(null);
-  const router = useRouter();
-  const tokenRef = useRef<string | null>(null);
+  const [user, setUser]             = useState<{ name: string; email: string; role: string } | null>(null);
+
+  const fileInputRef   = useRef<HTMLInputElement>(null);
+  const router         = useRouter();
+  const tokenRef       = useRef<string | null>(null);
   const isUploadingRef = useRef(false);
 
   useEffect(() => {
-    const token = localStorage.getItem('token');
+    const token    = localStorage.getItem('token');
     const userData = localStorage.getItem('user');
-    
-    if (!token || !userData) {
-      router.push('/login');
-      return;
-    }
-    
+    if (!token || !userData) { router.push('/login'); return; }
     tokenRef.current = token;
     setUser(JSON.parse(userData));
-
     fetchFiles();
-    // Polling for updates
     const interval = setInterval(fetchFiles, 5000);
     return () => clearInterval(interval);
   }, [router]);
@@ -49,114 +50,71 @@ export default function Dashboard() {
   const fetchFiles = async () => {
     if (!tokenRef.current) return;
     try {
-      const res = await fetch(API_URL, {
-        headers: {
-          'Authorization': `Bearer ${tokenRef.current}`
-        }
-      });
+      const res  = await fetch(API_URL, { headers: { Authorization: `Bearer ${tokenRef.current}` } });
       const data = await res.json();
-      if (data.success) {
-        setFiles(data.files);
-      }
-    } catch (err) {
-      console.error('Failed to fetch files', err);
-    }
-  };
-
-  const handleLogout = () => {
-    localStorage.removeItem('token');
-    localStorage.removeItem('user');
-    router.push('/login');
-  };
-
-  const deleteFile = async (fileId: string, fileName: string) => {
-    if (!tokenRef.current) return;
-    if (!window.confirm(`Delete "${fileName}"? This cannot be undone.`)) return;
-    try {
-      const res = await fetch(`${API_URL}/${fileId}`, {
-        method: 'DELETE',
-        headers: { 'Authorization': `Bearer ${tokenRef.current}` }
-      });
-      if (res.ok) {
-        fetchFiles();
-      } else {
-        alert('Failed to delete file.');
-      }
-    } catch (err) {
-      alert('Network error while deleting.');
-    }
+      if (data.success) setFiles(data.files);
+    } catch { /* silent */ }
   };
 
   const formatBytes = (bytes: string | number) => {
     const size = Number(bytes);
     if (size === 0) return '0 B';
     const k = 1024;
-    const sizes = ['B', 'KB', 'MB', 'GB', 'TB'];
+    const s = ['B', 'KB', 'MB', 'GB', 'TB'];
     const i = Math.floor(Math.log(size) / Math.log(k));
-    return parseFloat((size / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+    return parseFloat((size / Math.pow(k, i)).toFixed(1)) + ' ' + s[i];
   };
 
-  const uploadFile = (file: File): Promise<void> => {
-    return new Promise((resolve) => {
+  const uploadFile = (file: File): Promise<void> =>
+    new Promise((resolve) => {
       if (!tokenRef.current) { resolve(); return; }
-      setUploading({ name: file.name, progress: 0, speedStr: 'Calculating...', etaStr: 'Calculating...' });
-      
-      const xhr = new XMLHttpRequest();
+      setUploading({ name: file.name, progress: 0, speedStr: '—', etaStr: '—' });
+
+      const xhr      = new XMLHttpRequest();
       const formData = new FormData();
       formData.append('file', file);
-      
-      const startTime = Date.now();
+
       let lastLoaded = 0;
-      let lastTime = startTime;
+      let lastTime   = Date.now();
 
-      xhr.upload.onprogress = (event) => {
-        if (event.lengthComputable) {
-          const progress = Math.round((event.loaded / event.total) * 100);
-          const currentTime = Date.now();
-          const timeDiff = currentTime - lastTime;
-          let speedStr = 'Calculating...';
-          let etaStr = 'Calculating...';
+      xhr.upload.onprogress = (e) => {
+        if (!e.lengthComputable) return;
+        const progress    = Math.round((e.loaded / e.total) * 100);
+        const currentTime = Date.now();
+        const timeDiff    = currentTime - lastTime;
 
-          if (timeDiff > 500 || event.loaded === event.total) {
-              const loadedDiff = event.loaded - lastLoaded;
-              const speedBps = (loadedDiff / timeDiff) * 1000;
-              const remainingBytes = event.total - event.loaded;
-              const etaSeconds = speedBps > 0 ? remainingBytes / speedBps : 0;
-              speedStr = `${formatBytes(speedBps)}/s`;
-              etaStr = etaSeconds < 60 ? `${Math.ceil(etaSeconds)}s` : `${Math.floor(etaSeconds / 60)}m ${Math.ceil(etaSeconds % 60)}s`;
-              lastTime = currentTime;
-              lastLoaded = event.loaded;
-          } else {
-              setUploading(prev => {
-                  if (prev) { speedStr = prev.speedStr || speedStr; etaStr = prev.etaStr || etaStr; }
-                  return { name: file.name, progress, speedStr, etaStr };
-              });
-              return;
-          }
+        if (timeDiff > 500 || e.loaded === e.total) {
+          const speedBps   = ((e.loaded - lastLoaded) / timeDiff) * 1000;
+          const remaining  = e.total - e.loaded;
+          const etaSec     = speedBps > 0 ? remaining / speedBps : 0;
+          const speedStr   = `${formatBytes(speedBps)}/s`;
+          const etaStr     = etaSec < 60
+            ? `${Math.ceil(etaSec)}s`
+            : `${Math.floor(etaSec / 60)}m ${Math.ceil(etaSec % 60)}s`;
+          lastLoaded = e.loaded;
+          lastTime   = currentTime;
           setUploading({ name: file.name, progress, speedStr, etaStr });
+        } else {
+          setUploading(prev => prev ? { ...prev, progress } : null);
         }
       };
-      
+
       xhr.onload = () => {
         setUploading(null);
-        if (xhr.status === 200) { fetchFiles(); }
-        else { alert(`Upload failed for: ${file.name}`); }
+        if (xhr.status !== 200) alert(`Upload failed: ${file.name}`);
         resolve();
       };
-      
       xhr.onerror = () => {
         setUploading(null);
         alert(`Network error uploading: ${file.name}`);
         resolve();
       };
-      
+
       xhr.open('POST', `${API_URL}/upload`, true);
       xhr.setRequestHeader('Authorization', `Bearer ${tokenRef.current}`);
       xhr.send(formData);
     });
-  };
 
-  // Process the queue sequentially — one file at a time
   const processQueue = async (filesToUpload: File[]) => {
     if (isUploadingRef.current) return;
     isUploadingRef.current = true;
@@ -169,13 +127,10 @@ export default function Dashboard() {
   };
 
   const enqueueFiles = (newFiles: File[]) => {
-    if (newFiles.length === 0) return;
+    if (!newFiles.length) return;
     setUploadQueue(prev => {
       const updated = [...prev, ...newFiles];
-      if (!isUploadingRef.current) {
-        // start processing from the current queue + new files
-        processQueue([...prev, ...newFiles]);
-      }
+      if (!isUploadingRef.current) processQueue(updated);
       return updated;
     });
   };
@@ -183,16 +138,40 @@ export default function Dashboard() {
   const handleDrop = (e: React.DragEvent) => {
     e.preventDefault();
     setIsDragging(false);
-    if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
-      enqueueFiles(Array.from(e.dataTransfer.files));
-    }
+    if (e.dataTransfer.files?.length) enqueueFiles(Array.from(e.dataTransfer.files));
   };
 
-  if (!user) return <div style={{ textAlign: 'center', marginTop: '20vh' }}>Loading...</div>;
+  const deleteFile = async (fileId: string, fileName: string) => {
+    if (!tokenRef.current) return;
+    if (!window.confirm(`Delete "${fileName}"?`)) return;
+    try {
+      const res = await fetch(`${API_URL}/${fileId}`, {
+        method: 'DELETE',
+        headers: { Authorization: `Bearer ${tokenRef.current}` }
+      });
+      if (res.ok) fetchFiles();
+      else alert('Failed to delete file.');
+    } catch { alert('Network error while deleting.'); }
+  };
+
+  const handleLogout = () => {
+    localStorage.removeItem('token');
+    localStorage.removeItem('user');
+    router.push('/login');
+  };
+
+  if (!user) return (
+    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100vh', color: 'var(--text-muted)', fontSize: '0.9rem' }}>
+      Loading…
+    </div>
+  );
+
+  const queueRemaining = uploadQueue.slice(1); // files after the current one
 
   return (
-    <div className="animate-fade-in">
-      {/* Header */}
+    <div className={`animate-fade-in ${styles.page}`}>
+
+      {/* ── Header ── */}
       <header className={styles.header}>
         <div className={styles.logo}>
           <div className={styles.logoIcon}>
@@ -202,36 +181,31 @@ export default function Dashboard() {
           </div>
           <h1>PolyStore</h1>
         </div>
-        
-        <div style={{ display: 'flex', alignItems: 'center', gap: '1.5rem' }}>
-          <span style={{ color: 'var(--text-secondary)' }}>Welcome, <strong style={{ color: 'white' }}>{user.name}</strong></span>
+
+        <div className={styles.headerActions}>
+          <span className={styles.welcomeText}>
+            Welcome, <strong>{user.name || user.email}</strong>
+          </span>
           {user.role === 'ADMIN' && (
-            <a href="/admin" style={{ padding: '0.5rem 1rem', backgroundColor: 'rgba(139, 92, 246, 0.15)', color: '#a78bfa', border: '1px solid rgba(139, 92, 246, 0.3)', borderRadius: '8px', cursor: 'pointer', fontWeight: 500, textDecoration: 'none', fontSize: '0.9rem' }}>Admin Panel</a>
+            <a href="/admin" className={styles.adminLink}>
+              ⚙ Admin
+            </a>
           )}
-          <button 
-            onClick={handleLogout}
-            style={{
-              padding: '0.5rem 1rem',
-              backgroundColor: 'rgba(255, 0, 0, 0.1)',
-              color: '#ff8a8a',
-              border: '1px solid rgba(255, 0, 0, 0.2)',
-              borderRadius: '8px',
-              cursor: 'pointer',
-              fontWeight: 500
-            }}
-          >
-            Logout
+          <button onClick={handleLogout} className={styles.logoutBtn}>
+            Sign out
           </button>
         </div>
       </header>
 
-      {/* Main Grid */}
+      {/* ── Main Grid ── */}
       <div className={styles.dashboardGrid}>
-        
-        {/* Sidebar / Upload Area */}
-        <div className={styles.sidebar}>
-          <div 
-            className={`glass-panel ${styles.dropzone} ${isDragging ? styles.dropzoneActive : ''}`}
+
+        {/* Sidebar */}
+        <aside className={styles.sidebar}>
+
+          {/* Dropzone */}
+          <div
+            className={`${styles.dropzone} ${isDragging ? styles.dropzoneActive : ''}`}
             onDragOver={(e) => { e.preventDefault(); setIsDragging(true); }}
             onDragLeave={() => setIsDragging(false)}
             onDrop={handleDrop}
@@ -243,87 +217,114 @@ export default function Dashboard() {
               </svg>
             </div>
             <h2>Upload files</h2>
-            <p>Drag and drop, or click to browse.<br/><small style={{opacity:0.6}}>Multiple files supported — uploaded one by one</small></p>
-            <button className={styles.uploadBtn}>Browse Files</button>
-            <input 
+            <p>Drag & drop or click to browse.<br />Multiple files supported.</p>
+            <button className={styles.uploadBtn} tabIndex={-1}>Browse</button>
+            <input
               type="file"
               multiple
-              style={{ display: 'none' }} 
+              style={{ display: 'none' }}
               ref={fileInputRef}
               onChange={(e) => {
-                if (e.target.files && e.target.files.length > 0) {
+                if (e.target.files?.length) {
                   enqueueFiles(Array.from(e.target.files));
                   e.target.value = '';
                 }
               }}
             />
           </div>
-          
-          {uploading && (
-            <div className={`glass-panel`} style={{ padding: '1.25rem' }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.25rem' }}>
-                <p style={{ margin: 0, color: '#fff', fontSize: '0.9rem', fontWeight: 500 }}>
-                  Uploading: {uploading.name}
-                </p>
-                {uploadQueue.length > 1 && (
-                  <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', backgroundColor: 'rgba(255,255,255,0.07)', padding: '0.15rem 0.5rem', borderRadius: '999px' }}>
-                    {uploadQueue.length - 1} more in queue
-                  </span>
-                )}
-              </div>
-              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.8rem', color: 'var(--text-secondary)', marginBottom: '0.5rem' }}>
-                <span>{uploading.speedStr}</span>
-                <span>ETA: {uploading.etaStr}</span>
-              </div>
-              <div className={styles.progressBar}>
-                <div className={styles.progressFill} style={{ width: `${uploading.progress}%` }}></div>
-              </div>
-            </div>
-          )}
-        </div>
 
-        {/* File Grid */}
-        <div className={styles.fileArea}>
-          <h2>Your Private Files</h2>
-          <div className={styles.fileGrid}>
-            {files.map(file => (
-              <div key={file.id} className={`glass-panel ${styles.fileCard}`}>
-                <div className={`${styles.statusBadge} ${styles[file.status]}`}>{file.status}</div>
-                <div className={styles.fileIcon}>
-                  <svg viewBox="0 0 24 24">
-                    <path d="M14 2H6c-1.1 0-1.99.9-1.99 2L4 20c0 1.1.89 2 1.99 2h12c1.1 0 2-.9 2-2V8l-6-6zm2 16H8v-2h8v2zm0-4H8v-2h8v2zm-3-5V3.5L18.5 9H13z" />
-                  </svg>
-                </div>
-                <div className={styles.fileDetails}>
-                  <div className={styles.fileName} title={file.originalName}>{file.originalName}</div>
-                  <div className={styles.fileMeta}>
-                    <span>{formatBytes(file.size)}</span>
-                    <span>{new Date(file.createdAt).toLocaleDateString()}</span>
+          {/* Upload Queue */}
+          {(uploading || uploadQueue.length > 0) && (
+            <div className={styles.queuePanel}>
+              <div className={styles.queueHeader}>
+                <span className={styles.queueTitle}>Uploading</span>
+                <span className={styles.queueCount}>{uploadQueue.length} file{uploadQueue.length !== 1 ? 's' : ''}</span>
+              </div>
+
+              {/* Active file */}
+              {uploading && (
+                <div className={styles.queueItem}>
+                  <div className={styles.queueItemName}>{uploading.name}</div>
+                  <div className={styles.queueItemMeta}>
+                    <span>{uploading.speedStr}</span>
+                    <span>{uploading.progress}% · ETA {uploading.etaStr}</span>
+                  </div>
+                  <div className={styles.progressBar}>
+                    <div className={styles.progressFill} style={{ width: `${uploading.progress}%` }} />
                   </div>
                 </div>
-                <div style={{ display: 'flex', gap: '0.5rem', marginTop: '0.5rem' }}>
+              )}
+
+              {/* Waiting files */}
+              {queueRemaining.map((f, i) => (
+                <div key={i} className={styles.queueWaiting}>
+                  <span className={styles.waitDot} />
+                  <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{f.name}</span>
+                  <span style={{ marginLeft: 'auto', flexShrink: 0 }}>{formatBytes(f.size)}</span>
+                </div>
+              ))}
+            </div>
+          )}
+        </aside>
+
+        {/* File Grid */}
+        <section className={styles.fileArea}>
+          <div className={styles.fileAreaHeader}>
+            <h2>Your Files</h2>
+            {files.length > 0 && (
+              <span className={styles.fileCount}>{files.length} file{files.length !== 1 ? 's' : ''}</span>
+            )}
+          </div>
+
+          <div className={styles.fileGrid}>
+            {files.map(file => (
+              <div key={file.id} className={styles.fileCard}>
+                <span className={`${styles.statusBadge} ${styles[file.status]}`}>{file.status}</span>
+
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+                  <div className={styles.fileIcon}>
+                    <svg viewBox="0 0 24 24">
+                      <path d="M14 2H6c-1.1 0-1.99.9-1.99 2L4 20c0 1.1.89 2 1.99 2h12c1.1 0 2-.9 2-2V8l-6-6zm2 16H8v-2h8v2zm0-4H8v-2h8v2zm-3-5V3.5L18.5 9H13z" />
+                    </svg>
+                  </div>
+                  <div className={styles.fileDetails}>
+                    <div className={styles.fileName} title={file.originalName}>{file.originalName}</div>
+                    <div className={styles.fileMeta}>
+                      <span>{formatBytes(file.size)}</span>
+                      <span>{new Date(file.createdAt).toLocaleDateString()}</span>
+                    </div>
+                  </div>
+                </div>
+
+                <div className={styles.fileActions}>
                   {file.status === 'READY' && (
-                    <a href={`${API_URL}/download/${file.id}?token=${tokenRef.current}`} className={styles.downloadBtn} download>
-                      Download
+                    <a
+                      href={`${API_URL}/download/${file.id}?token=${tokenRef.current}`}
+                      className={styles.downloadBtn}
+                      download
+                    >
+                      ↓ Download
                     </a>
                   )}
                   <button
+                    className={styles.deleteBtn}
                     onClick={() => deleteFile(file.id, file.originalName)}
                     title="Delete file"
-                    style={{ padding: '0.4rem 0.75rem', backgroundColor: 'rgba(255,50,50,0.1)', color: '#ff8a8a', border: '1px solid rgba(255,50,50,0.25)', borderRadius: '6px', cursor: 'pointer', fontSize: '0.8rem', fontWeight: 500 }}
                   >
-                    🗑 Delete
+                    Delete
                   </button>
                 </div>
               </div>
             ))}
-            
+
             {files.length === 0 && (
-              <p>No files uploaded yet.</p>
+              <div className={styles.emptyState}>
+                <div className={styles.emptyIcon}>📂</div>
+                <p>No files yet. Upload your first file above.</p>
+              </div>
             )}
           </div>
-        </div>
-
+        </section>
       </div>
     </div>
   );
