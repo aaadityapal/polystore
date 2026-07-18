@@ -171,6 +171,8 @@ export default function Dashboard() {
   const handleDrop = (e: React.DragEvent) => {
     e.preventDefault();
     setIsDragging(false);
+    // Block new upload if one is already in progress
+    if (uploading) return;
     if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
       uploadFile(e.dataTransfer.files[0]);
     }
@@ -220,10 +222,11 @@ export default function Dashboard() {
         <div className={styles.sidebar}>
           <div 
             className={`glass-panel ${styles.dropzone} ${isDragging ? styles.dropzoneActive : ''}`}
-            onDragOver={(e) => { e.preventDefault(); setIsDragging(true); }}
+            onDragOver={(e) => { if (uploading) return; e.preventDefault(); setIsDragging(true); }}
             onDragLeave={() => setIsDragging(false)}
             onDrop={handleDrop}
-            onClick={() => fileInputRef.current?.click()}
+            onClick={() => { if (!uploading) fileInputRef.current?.click(); }}
+            style={{ opacity: uploading ? 0.5 : 1, cursor: uploading ? 'not-allowed' : 'pointer', pointerEvents: uploading ? 'none' : 'auto' }}
           >
             <div className={styles.uploadIcon}>
               <svg viewBox="0 0 24 24">
@@ -237,9 +240,13 @@ export default function Dashboard() {
               type="file" 
               style={{ display: 'none' }} 
               ref={fileInputRef}
+              disabled={!!uploading}
               onChange={(e) => {
+                if (uploading) return;
                 if (e.target.files && e.target.files.length > 0) {
                   uploadFile(e.target.files[0]);
+                  // Reset so the same file can be re-selected later
+                  e.target.value = '';
                 }
               }}
             />
