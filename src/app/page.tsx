@@ -20,11 +20,13 @@ export default function Dashboard() {
   const [files, setFiles] = useState<FileRecord[]>([]);
   const [isDragging, setIsDragging] = useState(false);
   const [uploading, setUploading] = useState<{ name: string; progress: number; speedStr?: string; etaStr?: string } | null>(null);
+  const [uploadQueue, setUploadQueue] = useState<File[]>([]);
   const [user, setUser] = useState<{ name: string; email: string; role: string } | null>(null);
   
   const fileInputRef = useRef<HTMLInputElement>(null);
   const router = useRouter();
   const tokenRef = useRef<string | null>(null);
+  const isUploadingRef = useRef(false);
 
   useEffect(() => {
     const token = localStorage.getItem('token');
@@ -94,87 +96,95 @@ export default function Dashboard() {
     return parseFloat((size / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
   };
 
-  const uploadFile = async (file: File) => {
-    if (!tokenRef.current) return;
-    setUploading({ name: file.name, progress: 0, speedStr: 'Calculating...', etaStr: 'Calculating...' });
-    
-    const xhr = new XMLHttpRequest();
-    const formData = new FormData();
-    formData.append('file', file);
-    
-    const startTime = Date.now();
-    let lastLoaded = 0;
-    let lastTime = startTime;
+  const uploadFile = (file: File): Promise<void> => {
+    return new Promise((resolve) => {
+      if (!tokenRef.current) { resolve(); return; }
+      setUploading({ name: file.name, progress: 0, speedStr: 'Calculating...', etaStr: 'Calculating...' });
+      
+      const xhr = new XMLHttpRequest();
+      const formData = new FormData();
+      formData.append('file', file);
+      
+      const startTime = Date.now();
+      let lastLoaded = 0;
+      let lastTime = startTime;
 
-    xhr.upload.onprogress = (event) => {
-      if (event.lengthComputable) {
-        const progress = Math.round((event.loaded / event.total) * 100);
-        const currentTime = Date.now();
-        
-        // Calculate over the last interval for smooth updates (min 500ms)
-        const timeDiff = currentTime - lastTime;
-        
-        let speedStr = 'Calculating...';
-        let etaStr = 'Calculating...';
+      xhr.upload.onprogress = (event) => {
+        if (event.lengthComputable) {
+          const progress = Math.round((event.loaded / event.total) * 100);
+          const currentTime = Date.now();
+          const timeDiff = currentTime - lastTime;
+          let speedStr = 'Calculating...';
+          let etaStr = 'Calculating...';
 
-        if (timeDiff > 500 || event.loaded === event.total) {
-            const loadedDiff = event.loaded - lastLoaded;
-            // Bytes per second
-            const speedBps = (loadedDiff / timeDiff) * 1000;
-            const remainingBytes = event.total - event.loaded;
-            const etaSeconds = speedBps > 0 ? remainingBytes / speedBps : 0;
-            
-            speedStr = `${formatBytes(speedBps)}/s`;
-            if (etaSeconds < 60) {
-              etaStr = `${Math.ceil(etaSeconds)}s`;
-            } else {
-              etaStr = `${Math.floor(etaSeconds / 60)}m ${Math.ceil(etaSeconds % 60)}s`;
-            }
-
-            lastTime = currentTime;
-            lastLoaded = event.loaded;
-        } else {
-            // Keep previous state if not enough time passed to avoid jitter
-            setUploading(prev => {
-                if (prev) {
-                   speedStr = prev.speedStr || speedStr;
-                   etaStr = prev.etaStr || etaStr;
-                }
-                return { name: file.name, progress, speedStr, etaStr };
-            });
-            return;
+          if (timeDiff > 500 || event.loaded === event.total) {
+              const loadedDiff = event.loaded - lastLoaded;
+              const speedBps = (loadedDiff / timeDiff) * 1000;
+              const remainingBytes = event.total - event.loaded;
+              const etaSeconds = speedBps > 0 ? remainingBytes / speedBps : 0;
+              speedStr = `${formatBytes(speedBps)}/s`;
+              etaStr = etaSeconds < 60 ? `${Math.ceil(etaSeconds)}s` : `${Math.floor(etaSeconds / 60)}m ${Math.ceil(etaSeconds % 60)}s`;
+              lastTime = currentTime;
+              lastLoaded = event.loaded;
+          } else {
+              setUploading(prev => {
+                  if (prev) { speedStr = prev.speedStr || speedStr; etaStr = prev.etaStr || etaStr; }
+                  return { name: file.name, progress, speedStr, etaStr };
+              });
+              return;
+          }
+          setUploading({ name: file.name, progress, speedStr, etaStr });
         }
+      };
+      
+      xhr.onload = () => {
+        setUploading(null);
+        if (xhr.status === 200) { fetchFiles(); }
+        else { alert(`Upload failed for: ${file.name}`); }
+        resolve();
+      };
+      
+      xhr.onerror = () => {
+        setUploading(null);
+        alert(`Network error uploading: ${file.name}`);
+        resolve();
+      };
+      
+      xhr.open('POST', `${API_URL}/upload`, true);
+      xhr.setRequestHeader('Authorization', `Bearer ${tokenRef.current}`);
+      xhr.send(formData);
+    });
+  };
 
-        setUploading({ name: file.name, progress, speedStr, etaStr });
+  // Process the queue sequentially — one file at a time
+  const processQueue = async (filesToUpload: File[]) => {
+    if (isUploadingRef.current) return;
+    isUploadingRef.current = true;
+    for (const file of filesToUpload) {
+      await uploadFile(file);
+      setUploadQueue(prev => prev.slice(1));
+    }
+    isUploadingRef.current = false;
+    fetchFiles();
+  };
+
+  const enqueueFiles = (newFiles: File[]) => {
+    if (newFiles.length === 0) return;
+    setUploadQueue(prev => {
+      const updated = [...prev, ...newFiles];
+      if (!isUploadingRef.current) {
+        // start processing from the current queue + new files
+        processQueue([...prev, ...newFiles]);
       }
-    };
-    
-    xhr.onload = () => {
-      setUploading(null);
-      if (xhr.status === 200) {
-        fetchFiles();
-      } else {
-        alert('Upload failed!');
-      }
-    };
-    
-    xhr.onerror = () => {
-      setUploading(null);
-      alert('Upload failed due to network error.');
-    };
-    
-    xhr.open('POST', `${API_URL}/upload`, true);
-    xhr.setRequestHeader('Authorization', `Bearer ${tokenRef.current}`);
-    xhr.send(formData);
+      return updated;
+    });
   };
 
   const handleDrop = (e: React.DragEvent) => {
     e.preventDefault();
     setIsDragging(false);
-    // Block new upload if one is already in progress
-    if (uploading) return;
     if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
-      uploadFile(e.dataTransfer.files[0]);
+      enqueueFiles(Array.from(e.dataTransfer.files));
     }
   };
 
@@ -222,30 +232,27 @@ export default function Dashboard() {
         <div className={styles.sidebar}>
           <div 
             className={`glass-panel ${styles.dropzone} ${isDragging ? styles.dropzoneActive : ''}`}
-            onDragOver={(e) => { if (uploading) return; e.preventDefault(); setIsDragging(true); }}
+            onDragOver={(e) => { e.preventDefault(); setIsDragging(true); }}
             onDragLeave={() => setIsDragging(false)}
             onDrop={handleDrop}
-            onClick={() => { if (!uploading) fileInputRef.current?.click(); }}
-            style={{ opacity: uploading ? 0.5 : 1, cursor: uploading ? 'not-allowed' : 'pointer', pointerEvents: uploading ? 'none' : 'auto' }}
+            onClick={() => fileInputRef.current?.click()}
           >
             <div className={styles.uploadIcon}>
               <svg viewBox="0 0 24 24">
                 <path d="M9 16h6v-6h4l-7-7-7 7h4zm-4 2h14v2H5z" />
               </svg>
             </div>
-            <h2>Upload a file</h2>
-            <p>Drag and drop, or click to browse.</p>
+            <h2>Upload files</h2>
+            <p>Drag and drop, or click to browse.<br/><small style={{opacity:0.6}}>Multiple files supported — uploaded one by one</small></p>
             <button className={styles.uploadBtn}>Browse Files</button>
             <input 
-              type="file" 
+              type="file"
+              multiple
               style={{ display: 'none' }} 
               ref={fileInputRef}
-              disabled={!!uploading}
               onChange={(e) => {
-                if (uploading) return;
                 if (e.target.files && e.target.files.length > 0) {
-                  uploadFile(e.target.files[0]);
-                  // Reset so the same file can be re-selected later
+                  enqueueFiles(Array.from(e.target.files));
                   e.target.value = '';
                 }
               }}
@@ -254,9 +261,16 @@ export default function Dashboard() {
           
           {uploading && (
             <div className={`glass-panel`} style={{ padding: '1.25rem' }}>
-              <p style={{ marginBottom: '0.25rem', color: '#fff', fontSize: '0.9rem', fontWeight: 500 }}>
-                Uploading: {uploading.name}
-              </p>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.25rem' }}>
+                <p style={{ margin: 0, color: '#fff', fontSize: '0.9rem', fontWeight: 500 }}>
+                  Uploading: {uploading.name}
+                </p>
+                {uploadQueue.length > 1 && (
+                  <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', backgroundColor: 'rgba(255,255,255,0.07)', padding: '0.15rem 0.5rem', borderRadius: '999px' }}>
+                    {uploadQueue.length - 1} more in queue
+                  </span>
+                )}
+              </div>
               <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.8rem', color: 'var(--text-secondary)', marginBottom: '0.5rem' }}>
                 <span>{uploading.speedStr}</span>
                 <span>ETA: {uploading.etaStr}</span>
